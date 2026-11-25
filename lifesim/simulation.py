@@ -9,7 +9,7 @@ from collections import deque
 from . import actions as A
 from . import items as I
 from . import world as W
-from .agent import COLORS, NAMES, Agent
+from .agent import COLORS, FEMALE_NAMES, NAMES, Agent
 from .animals import AnimalManager
 from .blueprints import Site
 from .brain import heuristic_plan
@@ -105,8 +105,15 @@ class Simulation:
     def add_agent(self, x, y, parents=()):
         aid = self._next_agent
         self._next_agent += 1
-        ag = Agent(aid, self._new_name(), x, y, COLORS[(aid - 1) % len(COLORS)], hp=self.cfg.max_hp,
+        name = self._new_name()
+        ag = Agent(aid, name, x, y, COLORS[(aid - 1) % len(COLORS)], hp=self.cfg.max_hp,
                    born=self.tick, parents=parents)
+        if name in FEMALE_NAMES or (name not in NAMES and self.rng.random() < 0.5):
+            ag.gender = "f"
+        ag.outfit = self.rng.randrange(21)
+        ag.energy = self.rng.uniform(70, 95)
+        ag.social = self.rng.uniform(50, 80)
+        ag.fun = self.rng.uniform(50, 80)
         self.agents[aid] = ag
         return ag
 
@@ -304,6 +311,7 @@ class Simulation:
     # ================================================================ social
     def speak(self, ag, text, target=None):
         ag.speech = (text, self.tick + 80)
+        ag.social = min(100.0, ag.social + 6)
         self.remember(ag, f"Tu as dit{' à ' + target.name if target else ''} : « {text} »")
         self.event(f"{ag.name}{' → ' + target.name if target else ''} : « {text} »")
         r = self.cfg.hearing_radius
@@ -312,6 +320,7 @@ class Simulation:
                 continue
             if abs(o.x - ag.x) <= r and abs(o.y - ag.y) <= r:
                 to_you = target is not None and target.id == o.id
+                o.social = min(100.0, o.social + (8 if to_you else 3))
                 o.inbox.append((self.tick, f"{ag.name} said{' to you' if to_you else ''}: \"{text}\""))
                 if to_you:
                     self.wake(o, f"{ag.name} spoke to you")
@@ -422,6 +431,7 @@ class Simulation:
 
     # ================================================================ plans
     def _cancel_task(self, ag):
+        ag.activity, ag.focus, ag.seat = "idle", None, None
         if ag.task is not None:
             try:
                 ag.task.close()
@@ -471,6 +481,7 @@ class Simulation:
             next(ag.task)
         except StopIteration as e:
             ag.task = None
+            ag.activity, ag.focus, ag.seat = "idle", None, None
             ag.step_results.append(f"OK {label}: {e.value}")
             ag.step_idx += 1
             if ag.step_idx >= len(ag.plan) and ag.in_routine:
@@ -478,6 +489,7 @@ class Simulation:
                 ag.routine_cycles += 1
         except A.ActionFailed as e:
             ag.task = None
+            ag.activity, ag.focus, ag.seat = "idle", None, None
             ag.step_results.append(f"FAILED {label}: {e}")
             if label in NON_BLOCKING:
                 # étape secondaire : on note l'échec et on poursuit le plan sans rappeler le LLM
@@ -633,6 +645,26 @@ class Simulation:
                 ag.hp = min(cfg.max_hp, ag.hp + cfg.regen_rate)
             if night and not self.world.is_warm(ag.x, ag.y):
                 ag.hp -= cfg.cold_damage
+            # besoins « quotidiens » : énergie, vie sociale, loisirs
+            if ag.sleeping:
+                in_bed = ag.activity == "sleep_bed"
+                ag.energy = min(100.0, ag.energy + (0.4 if in_bed else 0.2))
+            else:
+                ag.energy = max(0.0, ag.energy - 1 / 15)
+            ag.social = max(0.0, ag.social - 1 / 60)
+            if t % 10 == 0:  # la simple présence d'autres personnes tout près fait du bien
+                company = sum(1 for o in self.agents.values() if o.alive and o is not ag
+                              and abs(o.x - ag.x) <= 3 and abs(o.y - ag.y) <= 3)
+                ag.social = min(100.0, ag.social + 0.15 * min(company, 3))
+            if ag.activity in ("chop", "mine", "dig", "build", "farm", "harvest", "craft"):
+                ag.fun = max(0.0, ag.fun - 1 / 20)
+            else:
+                ag.fun = max(0.0, ag.fun - 1 / 45)
+            if t % 600 == 0:
+                if ag.energy < 10 and not ag.sleeping:
+                    self.wake(ag, f"you are exhausted (energy {ag.energy:.0f}), your work is much slower")
+                elif ag.mood < 25:
+                    self.wake(ag, f"you feel miserable (mood {ag.mood:.0f}/100)")
             if ag.attack_cd > 0:
                 ag.attack_cd -= 1
             if ag.speech and ag.speech[1] < t:
@@ -665,6 +697,15 @@ class Simulation:
             self._maybe_request(ag)
             self._run_task(ag)
 
+        # rythme de vie : à la tombée de la nuit et au matin, chacun refait le point
+        frac = (t % cfg.day_length) / cfg.day_length
+        if t % cfg.day_length == int(cfg.day_length * (1 - cfg.night_fraction)) - 30:
+            for ag in self.living_agents():
+                self.wake(ag, f"night is falling (your energy {ag.energy:.0f})")
+        elif t % cfg.day_length == 0 and t > 0:
+            for ag in self.living_agents():
+                if not ag.sleeping:
+                    self.wake(ag, "a new day begins")
         # offres expirées
         if t % 100 == 0:
             for oid in [k for k, o in self.trades.items() if o["expires"] < t]:

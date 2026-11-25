@@ -15,6 +15,10 @@ NAMES = [
     "Arthur", "Bérénice", "Côme", "Diane", "Eliott", "Flora", "Gustave", "Héloïse", "Isaac", "Joséphine",
 ]
 
+FEMALE_NAMES = {"Alice", "Chloé", "Emma", "Gaëlle", "Inès", "Katia", "Manon", "Océane", "Rose", "Tess", "Wendy",
+                "Yasmine", "Zoé", "Bianca", "Camille", "Elsa", "Hana", "Jade", "Lina", "Nora", "Pia", "Sofia", "Uma",
+                "Zélie", "Bérénice", "Diane", "Flora", "Héloïse", "Joséphine"}
+
 COLORS = [
     (230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130, 48), (145, 30, 180),
     (70, 240, 240), (240, 50, 230), (210, 245, 60), (250, 190, 212), (0, 128, 128), (220, 190, 255),
@@ -33,6 +37,14 @@ class Agent:
     color: tuple
     hp: float = 20.0
     hunger: float = 90.0
+    energy: float = 90.0             # baisse éveillé, remonte en dormant
+    social: float = 70.0             # baisse seul, remonte en parlant / échangeant
+    fun: float = 70.0                # baisse en travaillant, remonte en se détendant
+    gender: str = "m"
+    outfit: int = 0                  # tenue (modèle 3D) ; change avec une armoire
+    activity: str = "idle"           # ce que fait le corps (pour l'animation 3D)
+    focus: tuple | None = None       # case regardée / travaillée
+    seat: tuple | None = None        # meuble occupé
     alive: bool = True
     born: int = 0
     parents: tuple = ()
@@ -72,6 +84,23 @@ class Agent:
     death_cause: str = ""
     last_attacker: int | None = None
     attack_cd: int = 0
+
+    @property
+    def mood(self):
+        """Humeur 0..100 : moyenne des besoins (la faim compte double)."""
+        return (2 * self.hunger + self.energy + self.social + self.fun) / 5
+
+    def work_factor(self):
+        """Multiplicateur de durée de travail selon la fatigue et l'humeur."""
+        f = 1.0
+        if self.energy < 15:
+            f *= 1.6
+        m = self.mood
+        if m > 70:
+            f *= 0.85
+        elif m < 30:
+            f *= 1.3
+        return f
 
     def __getstate__(self):
         # l'étape en cours (générateur) ne se sauvegarde pas : elle redémarrera à la reprise

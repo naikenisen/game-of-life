@@ -142,8 +142,22 @@ def wait(n):
         yield
 
 
-def work_time(base, tier):
-    return max(2, int(base / (1 + 0.8 * tier)))
+def work_time(base, tier, ag=None):
+    t = base / (1 + 0.8 * tier)
+    if ag is not None:
+        t *= ag.work_factor()
+    return max(2, int(t))
+
+
+def doing(ag, activity, focus=None):
+    """Déclare ce que fait le corps de l'agent (utilisé par la vue 3D pour l'animation)."""
+    ag.activity = activity
+    ag.focus = focus
+
+
+GATHER_ACTIVITY = {W.TREE: "chop", W.ROCK: "mine", W.COAL: "mine", W.IRON: "mine", W.GOLD: "mine",
+                   W.DIAMOND: "mine", W.CLAY: "dig", W.GRAVEL: "dig", W.BUSH: "pick", W.TALL_GRASS: "pick",
+                   W.MUSHROOM: "pick"}
 
 
 # ============================================================== actions de base
@@ -343,7 +357,8 @@ def act_gather(sim, ag, p):
         while ag.inv.get(item, 0) - start_count < amount:
             if resource == "sand":
                 tier, tool = ag.best_tool("shovel")
-                yield from wait(work_time(8, tier))
+                doing(ag, "dig", target)
+                yield from wait(work_time(8, tier, ag))
                 ag.use_tool(tool)
                 ag.add("sand")
                 got += 1
@@ -358,7 +373,8 @@ def act_gather(sim, ag, p):
             if tier < min_tier:
                 need = {1: "any pickaxe (wooden_pickaxe+)", 2: "stone_pickaxe or better", 3: "iron_pickaxe or better"}
                 raise ActionFailed(f"{W.FEATURE_NAMES[f]} requires {need.get(min_tier, kind)}")
-            yield from wait(work_time(base, tier))
+            doing(ag, GATHER_ACTIVITY.get(f, "pick"), target)
+            yield from wait(work_time(base, tier, ag))
             if not w.has_resource(tx, ty, f):
                 break
             w.take_feature(tx, ty, sim.tick)
@@ -454,6 +470,15 @@ def _find_station(sim, ag, station):
     return best, ok
 
 
+def _nearest_station_pos(sim, ag):
+    for dy in range(-3, 4):
+        for dx in range(-3, 4):
+            b = sim.world.blocks.get((ag.x + dx, ag.y + dy))
+            if b is not None and I.BLOCKS[b.type].get("station"):
+                return (ag.x + dx, ag.y + dy)
+    return None
+
+
 def _ensure_station(sim, ag, station):
     if station is None:
         return
@@ -495,6 +520,7 @@ def craft_item(sim, ag, item, count, depth=0):
                 raise ActionFailed(f"cannot craft {out_item}: missing {missing} (recipe needs {ins})")
             return made
         yield from _ensure_station(sim, ag, r["station"])
+        doing(ag, "craft", _nearest_station_pos(sim, ag))
         yield from wait(15 if r["station"] in ("furnace", "cook") else 5)
         ok, missing = _can_craft_once(ag, recipe)
         if not ok:
@@ -512,10 +538,45 @@ def act_craft(sim, ag, p):
 
 
 # ============================================================== nourriture
+def _find_block(sim, ag, types, radius=40, own_first=True, pred=None):
+    """Bloc le plus proche parmi `types` (les siens d'abord). Renvoie (pos, block) ou (None, None)."""
+    best = None
+    for pos, b in sim.world.blocks.items():
+        if b.type in types and (pred is None or pred(pos, b)):
+            d = manhattan(pos, ag.pos) + (0 if (b.owner == ag.id or not own_first) else 25)
+            if manhattan(pos, ag.pos) <= radius and (best is None or d < best[0]):
+                best = (d, pos, b)
+    return (best[1], best[2]) if best else (None, None)
+
+
+def _seat_near_table(sim, ag):
+    """Chaise/tabouret/canapé libre à côté d'une table, proche."""
+    w = sim.world
+
+    def ok(pos, b):
+        if sim.occupied(*pos) and pos != ag.pos:
+            return False
+        return any(w.blocks.get(n) is not None and w.blocks[n].type == "table" for n in w.neighbors4(*pos))
+    pos, _ = _find_block(sim, ag, ("chair", "stool", "sofa"), radius=12, pred=ok)
+    return pos
+
+
 def act_eat(sim, ag, p):
     item = norm_item(p.get("item", "best"))
     count = min(10, max(1, _int(p, "count", 1)))
     eaten = 0
+    seat = _seat_near_table(sim, ag) if ag.food_items() else None
+    if seat:
+        try:
+            yield from walk_to(sim, ag, {seat}, max_ticks=300)
+            ag.seat = seat
+            table = next(n for n in sim.world.neighbors4(*seat) if sim.world.blocks.get(n) is not None
+                         and sim.world.blocks[n].type == "table")
+            doing(ag, "eat_seated", table)
+        except (ActionFailed, StopIteration):
+            seat = None
+    if not seat:
+        doing(ag, "eat")
     for _ in range(count):
         if ag.hunger >= 100:
             break
@@ -531,7 +592,12 @@ def act_eat(sim, ag, p):
             break
         sim.feed(ag, it)
         eaten += 1
-        yield from wait(4)
+        if seat:
+            ag.fun = min(100, ag.fun + 3)
+            ag.social = min(100, ag.social + 2 * len([o for o in sim.living_agents() if o is not ag
+                                                       and o.seat and manhattan(o.pos, ag.pos) <= 3]))
+        yield from wait(8 if seat else 4)
+    ag.seat = None
     if eaten == 0:
         raise ActionFailed("nothing to eat")
     return f"ate {eaten} (hunger now {ag.hunger:.0f})"
@@ -569,7 +635,8 @@ def _clear_tile_for_build(sim, ag, x, y):
         if tier < min_tier:
             return False
         while w.feature[y, x] == f and w.amount[y, x] > 0:
-            yield from wait(work_time(base, tier))
+            doing(ag, GATHER_ACTIVITY.get(f, "chop"), (x, y))
+            yield from wait(work_time(base, tier, ag))
             w.take_feature(x, y, sim.tick)
             ag.use_tool(tool)
             ag.add(product)
@@ -675,13 +742,16 @@ def run_site(sim, ag, site):
                 i += 1
                 site.done = i
                 continue
-            yield from wait(4)
+            doing(ag, "build", (x, y))
+            yield from wait(max(2, int(4 * ag.work_factor())))
             ag.remove(mat, 1)
             w.place_block(x, y, mat, ag.id, site.id)
         elif op == "roof":
+            doing(ag, "build", (x, y))
             yield from wait(3)
             ag.remove(mat, 1)
             w.roofs[(x, y)] = mat
+            w.mark(x, y)
             w.version += 1
         elif op == "till":
             if w.ground[y, x] not in (W.GRASS, W.DIRT) or (x, y) in w.blocks:
@@ -691,7 +761,8 @@ def run_site(sim, ag, site):
                 continue
             if w.feature[y, x] == W.TREE:
                 yield from _clear_tile_for_build(sim, ag, x, y)
-            yield from wait(work_time(10, ag.best_tool("hoe")[0]))
+            doing(ag, "farm", (x, y))
+            yield from wait(work_time(10, ag.best_tool("hoe")[0], ag))
             if w.feature[y, x] == W.TALL_GRASS and rng.random() < 0.3:
                 ag.add("wheat_seeds")
             w.feature[y, x] = W.NONE
@@ -706,9 +777,11 @@ def run_site(sim, ag, site):
                 i += 1
                 site.done = i
                 continue
+            doing(ag, "plant", (x, y))
             yield from wait(2)
             ag.remove("wheat_seeds", 1)
             w.crops[(x, y)] = {"stage": 0, "growth": 0, "owner": ag.id}
+            w.mark(x, y)
             w.version += 1
         i += 1
         site.done = i
@@ -744,6 +817,7 @@ def act_place(sim, ag, p):
         if not nb:
             raise ActionFailed("no room to step aside")
         ag.x, ag.y = nb[0]
+    doing(ag, "build", (x, y))
     yield from wait(4)
     if not w.buildable(x, y):
         raise ActionFailed(f"({x},{y}) became occupied")
@@ -788,8 +862,10 @@ def act_demolish(sim, ag, p):
     broken = 0
     for (cx, cy) in roofs:
         yield from walk_within(sim, ag, cx, cy, 2)
+        doing(ag, "build", (cx, cy))
         yield from wait(3)
         mat = w.roofs.pop((cx, cy), None)
+        w.mark(cx, cy)
         if mat:
             ag.add(mat)
             w.version += 1
@@ -803,6 +879,7 @@ def act_demolish(sim, ag, p):
         _, wdmg = ag.weapon()
         per_hit = 1 + tier * 2 + (wdmg / 3)
         while (cx, cy) in w.blocks and w.blocks[(cx, cy)] is b:
+            doing(ag, "mine" if stoney else "chop", (cx, cy))
             yield from wait(6)
             b.hp -= per_hit
             if b.hp <= 0:
@@ -837,12 +914,14 @@ def act_harvest(sim, ag, p):
         ripe.sort(key=lambda q: manhattan(q, ag.pos))
         x, y = ripe[0]
         yield from walk_adjacent(sim, ag, x, y)
+        doing(ag, "harvest", (x, y))
         yield from wait(3)
         c = w.crops.get((x, y))
         if not c or c["stage"] < 3:
             continue
         owner = c.get("owner")
         del w.crops[(x, y)]
+        w.mark(x, y)
         ag.add("wheat", rng.randint(1, 2))
         ag.add("wheat_seeds", rng.randint(1, 2))
         n += 1
@@ -881,8 +960,10 @@ def act_plant(sim, ag, p):
                                    else "no free ground nearby")
             break
         yield from walk_adjacent(sim, ag, *t)
+        doing(ag, "plant", t)
         yield from wait(3)
         ag.remove(item, 1)
+        w.mark(*t)
         if item == "wheat_seeds":
             w.crops[t] = {"stage": 0, "growth": 0, "owner": ag.id}
         else:
@@ -1179,7 +1260,9 @@ def act_fish(sim, ag, p):
     if t is None:
         raise ActionFailed("no shore nearby")
     yield from walk_to(sim, ag, {t})
+    water = next((n for n in w.neighbors4(*t) if w.in_bounds(*n) and w.ground[n[1], n[0]] == W.WATER), None)
     for _ in range(count):
+        doing(ag, "fish", water)
         yield from wait(rng.randint(30, 110))
         ag.add("raw_fish")
         ag.use_tool("fishing_rod")
@@ -1200,7 +1283,8 @@ def act_say(sim, ag, p):
     if target and manhattan(target.pos, ag.pos) > sim.cfg.hearing_radius:
         yield from follow_agent(sim, ag, target, until_adjacent=True, ticks=400)
     sim.speak(ag, text, target)
-    yield from wait(5)
+    doing(ag, "talk", target.pos if target else None)
+    yield from wait(8)
     return f"said: {text}"
 
 
@@ -1404,13 +1488,16 @@ def act_sleep(sim, ag, p):
         except ActionFailed:
             bed = None
     ag.sleeping = True
+    ag.seat = bed
+    doing(ag, "sleep_bed" if bed else "sleep", bed)
     try:
-        while sim.is_night():
+        while sim.is_night() or (ag.energy < 95 and p.get("until") == "rested"):
             if bed:
                 ag.hp = min(sim.cfg.max_hp, ag.hp + 0.03)
             yield
     finally:
         ag.sleeping = False
+        ag.seat = None
     return "slept until morning" + (" in a bed" if bed else " on the ground")
 
 
@@ -1458,6 +1545,207 @@ def act_propose_child(sim, ag, p):
     raise ActionFailed(f"{partner.name} did not respond to your proposal")
 
 
+# ============================================================== vie quotidienne
+USE_TYPES = {
+    "sit": ("chair", "stool", "sofa"),
+    "read": ("bookshelf",),
+    "eat": ("table",),
+    "dress": ("wardrobe",),
+    "drink": ("well",),
+    "nap": ("bed",),
+    "warm": ("campfire",),
+}
+FURNITURE_ALIASES = {"seat": "sit", "couch": "sofa", "books": "bookshelf", "book": "bookshelf",
+                     "closet": "wardrobe", "fire": "campfire", "fireplace": "campfire"}
+
+
+def act_use(sim, ag, p):
+    """Utiliser un meuble : s'asseoir, lire, faire la sieste, se changer, boire au puits, se chauffer..."""
+    w = sim.world
+    what = str(p.get("furniture", p.get("item", p.get("block", "chair")))).lower()
+    what = FURNITURE_ALIASES.get(what, what)
+    ticks = min(600, max(20, _int(p, "ticks", 120)))
+    if "x" in p and "y" in p:
+        pos = (_int(p, "x"), _int(p, "y"))
+        b = w.blocks.get(pos)
+        if b is None:
+            raise ActionFailed(f"no furniture at {pos}")
+    else:
+        types = USE_TYPES.get(what, (what,))
+        pos, b = _find_block(sim, ag, types, pred=lambda q, bb: not sim.occupied(*q) or q == ag.pos)
+        if pos is None:
+            raise ActionFailed(f"no free {what} known nearby (craft and place one)")
+    use = I.BLOCKS[b.type].get("use") or {"bed": "nap", "campfire": "warm"}.get(b.type)
+    if use is None:
+        raise ActionFailed(f"a {b.type} cannot be used, it is decoration")
+    if use == "eat":
+        return (yield from act_eat(sim, ag, {"item": "best", "count": 3}))
+    if w.passable(*pos, ag.id):
+        yield from walk_to(sim, ag, {pos})
+    else:
+        yield from walk_adjacent(sim, ag, *pos)
+    ag.seat = pos if w.passable(*pos, ag.id) else None
+    if use == "dress":
+        doing(ag, "dress", pos)
+        yield from wait(30)
+        ag.outfit = (ag.outfit + 1 + rng.randrange(5)) % 21
+        ag.fun = min(100, ag.fun + 8)
+        sim.witness(ag.pos, f"{ag.name} a changé de tenue", exclude={ag.id})
+        return "changed clothes"
+    if use == "drink":
+        doing(ag, "drink", pos)
+        yield from wait(15)
+        ag.hp = min(sim.cfg.max_hp, ag.hp + 2)
+        return "drank fresh water"
+    activity = {"sit": "sit", "read": "read", "nap": "sleep_bed", "warm": "sit_ground"}[use]
+    doing(ag, activity, pos)
+    if use == "nap":
+        ag.sleeping = True
+    try:
+        for _ in range(ticks):
+            if use == "sit":
+                ag.fun = min(100, ag.fun + 0.12)
+                ag.energy = min(100, ag.energy + 0.03)
+                if b.type == "sofa":
+                    ag.fun = min(100, ag.fun + 0.06)
+            elif use == "read":
+                ag.fun = min(100, ag.fun + 0.3)
+            elif use == "warm":
+                ag.fun = min(100, ag.fun + 0.15)
+            yield
+    finally:
+        ag.sleeping = False
+        ag.seat = None
+    return f"used the {b.type} ({use}) for {ticks} ticks"
+
+
+def act_relax(sim, ag, p):
+    """Se détendre sans meuble : danser, s'asseoir par terre, contempler, flâner."""
+    kind = str(p.get("activity", "sit")).lower()
+    ticks = min(600, max(20, _int(p, "ticks", 120)))
+    acts = {"dance": "dance", "sit": "sit_ground", "stargaze": "sit_ground", "rest": "sit_ground",
+            "watch": "idle_look", "stroll": "walk", "celebrate": "celebrate", "cry": "cry"}
+    act = acts.get(kind, "sit_ground")
+    if act == "walk":
+        for _ in range(4):
+            t = sim.world.find_nearest(ag.x + rng.randint(-6, 6), ag.y + rng.randint(-6, 6),
+                                       lambda a, b: sim.world.passable(a, b, ag.id), 4)
+            if t:
+                yield from walk_to(sim, ag, {t}, max_ticks=80)
+        ag.fun = min(100, ag.fun + 10)
+        return "took a stroll"
+    doing(ag, act, None)
+    for _ in range(ticks):
+        rate = 0.35 if act in ("dance", "celebrate") else 0.15
+        ag.fun = min(100, ag.fun + rate)
+        if act in ("dance", "celebrate"):
+            near = [o for o in sim.living_agents() if o is not ag and manhattan(o.pos, ag.pos) <= 4]
+            ag.social = min(100, ag.social + 0.05 * len(near))
+        yield
+    return f"relaxed ({kind}) for {ticks} ticks"
+
+
+FURNISH_ORDER = ["bed", "wardrobe", "bookshelf", "nightstand", "chest", "lamp", "plant_pot", "barrel", "sofa",
+                 "table", "chair", "stool", "rug", "crafting_table", "furnace", "torch"]
+
+
+def act_furnish(sim, ag, p):
+    """Aménage automatiquement l'intérieur d'une maison avec les meubles de l'inventaire (ou ceux demandés)."""
+    w = sim.world
+    sid = _int(p, "site_id", -1)
+    site = sim.structures.get(sid)
+    if site is None:
+        mine = [s for s in sim.structures.values() if s.owner == ag.id and s.kind in ("house", "custom")
+                and s.status == "complete"]
+        if not mine:
+            raise ActionFailed("no house to furnish (give site_id)")
+        site = min(mine, key=lambda s: manhattan((s.x, s.y), ag.pos))
+    wanted = p.get("items")
+    if isinstance(wanted, dict):
+        wanted = [k for k, v in wanted.items() for _ in range(max(1, int(v)))]
+    if not wanted:
+        wanted = [k for k in FURNISH_ORDER for _ in range(ag.inv.get(k, 0))]
+    wanted = [norm_item(k) for k in wanted if norm_item(k) in I.BLOCKS]
+    if not wanted:
+        raise ActionFailed("no furniture to place (craft some: bed, table, chair, sofa, bookshelf, wardrobe, rug, lamp...)")
+    wanted.sort(key=lambda k: FURNISH_ORDER.index(k) if k in FURNISH_ORDER else 99)
+    x0, y0, x1, y1 = site.x + 1, site.y + 1, site.x + site.w - 2, site.y + site.h - 2
+    inner = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+    if not inner:
+        raise ActionFailed("this building has no interior")
+    doors = [(x, y) for (x, y, op, m) in site.cells if op == "block" and m in ("door", "iron_door", "fence_gate")]
+    keep_free = {n for d in doors for n in w.neighbors4(*d)}
+    against_wall = [c for c in inner if c[0] in (x0, x1) or c[1] in (y0, y1)]
+    centre = [c for c in inner if c not in against_wall]
+    placed = []
+    for item in wanted:
+        if ag.inv.get(item, 0) <= 0:
+            try:
+                yield from craft_item(sim, ag, item, 1)
+            except ActionFailed:
+                continue
+        floor_item = item in ("rug",)
+        cands = (centre + against_wall) if item in ("table", "rug", "chair", "stool") else (against_wall + centre)
+        if item in ("chair", "stool"):
+            tables = [pos for pos in inner if w.blocks.get(pos) is not None and w.blocks[pos].type == "table"]
+            near_t = [n for t in tables for n in w.neighbors4(*t) if n in inner]
+            cands = near_t + cands
+        spot = None
+        for c in cands:
+            if c in keep_free or c in w.blocks or sim.occupied(*c):
+                continue
+            if not floor_item and I.BLOCKS[item]["solid"]:
+                # ne pas couper l'intérieur en deux : il doit rester un passage depuis la porte
+                w.blocks[c] = None  # test temporaire
+                w._update_cell(*c)
+                w.cost[c[1] * w.w + c[0]] = 0
+                reach = _interior_connected(w, inner, keep_free, ag.id)
+                del w.blocks[c]
+                w._update_cell(*c)
+                if not reach:
+                    continue
+            spot = c
+            break
+        if spot is None:
+            break
+        yield from walk_adjacent(sim, ag, *spot)
+        if ag.pos == spot:
+            nb = list(w.adjacent_goals(*spot, ag.id))
+            if nb:
+                ag.x, ag.y = nb[0]
+        doing(ag, "build", spot)
+        yield from wait(6)
+        if spot in w.blocks or ag.inv.get(item, 0) <= 0:
+            continue
+        ag.remove(item, 1)
+        w.place_block(spot[0], spot[1], item, ag.id, site.id)
+        if item == "bed" and ag.home is None:
+            ag.home = spot
+        placed.append(item)
+    if not placed:
+        raise ActionFailed("could not place any furniture (no room or no materials)")
+    sim.event(f"{ag.name} aménage {site.kind} #{site.id} : {', '.join(placed)}")
+    return f"furnished #{site.id} with {', '.join(placed)}"
+
+
+def _interior_connected(w, inner, entry, agent_id):
+    """Vrai si toutes les cases libres de l'intérieur restent reliées entre elles."""
+    free = [c for c in inner if w.passable(c[0], c[1], agent_id)]
+    if not free:
+        return False
+    start = next((c for c in free if c in entry), free[0])
+    seen = {start}
+    stack = [start]
+    inner_set = set(inner)
+    while stack:
+        x, y = stack.pop()
+        for n in w.neighbors4(x, y):
+            if n in inner_set and n not in seen and w.passable(n[0], n[1], agent_id):
+                seen.add(n)
+                stack.append(n)
+    return len(seen) == len(free)
+
+
 # ============================================================== registre
 ACTIONS = {
     "move_to": act_move_to,
@@ -1497,6 +1785,9 @@ ACTIONS = {
     "sleep": act_sleep,
     "allow": act_allow,
     "propose_child": act_propose_child,
+    "use": act_use,
+    "relax": act_relax,
+    "furnish": act_furnish,
 }
 
 # Documentation des actions pour le prompt (paramètres entre parenthèses)
@@ -1536,5 +1827,8 @@ pick_up(radius?)                   collect items lying on the ground
 drop(item, count)
 sleep()                            at night only: sleep until morning (in a bed: heals, safer)
 allow(x, y, target, revoke?)       let a person through your iron_door
+use(furniture, ticks?) or use(x, y)  use furniture: sit (chair/stool/sofa), read (bookshelf), nap (bed), eat seated (table), change clothes (wardrobe), drink (well), warm up (campfire)
+relax(activity, ticks?)            activity: dance | sit | stargaze | stroll | celebrate | cry
+furnish(site_id?, items?)          place furniture from your inventory inside your house automatically (bed, table, chairs, sofa, bookshelf, wardrobe, rug, lamp, plant_pot, chest...); missing ones are crafted if possible
 propose_child(partner)             if both partners propose to each other while standing together, a child is born (each needs hunger>=50, hp>=12; costs 30 hunger each)
 """

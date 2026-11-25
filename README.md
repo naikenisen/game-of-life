@@ -69,6 +69,62 @@ Options utiles :
 - **Espace** : pause, **+ / -** : vitesse (x0.25 à x32), **R** : afficher/masquer les toits, **H** : aide
 - **F5** : sauvegarder
 
+## Vue 3D (Godot) : visiter le monde
+
+Une vue 3D permet de se promener dans le monde pendant que les habitants vivent leur vie :
+vue aérienne libre, **mode visiteur** à pied (à hauteur d'yeux, on entre dans les maisons),
+ou caméra qui **suit un habitant**. Comme dans les Sims, les toits s'effacent quand on
+s'approche pour montrer les intérieurs, un losange coloré indique l'humeur de l'habitant
+sélectionné, et sa fiche affiche ses besoins, ses pensées, son plan, son sac et ses souvenirs.
+
+```bash
+./run3d.sh --offline          # gratuit, sans LLM (cerveau heuristique)
+./run3d.sh                    # avec le LLM (clé dans .env)
+./run3d.sh --load             # reprendre la partie sauvegardée
+QUALITY=low ./run3d.sh        # qualité graphique : low / medium / high (défaut : automatique)
+```
+
+Au premier lancement, le script télécharge les assets (≈120 Mo, CC0, voir
+`godot/CREDITS.md`), les importe dans Godot et transfère les animations sur les
+personnages (`godot/tools/bake_retarget.gd`). Godot 4.7+ est requis (`GODOT=/chemin/godot`
+si l'exécutable n'est pas dans le PATH).
+
+En 3D, la simulation tourne par défaut à 2 ticks/s : les habitants marchent à vitesse
+humaine et une journée dure 10 minutes. C'est aussi 5 fois moins d'appels LLM par heure
+qu'à la vitesse de la fenêtre 2D. Les boutons ▶ ▶▶ ▶▶▶ accélèrent le temps.
+
+**Commandes** — vue aérienne : ZQSD/flèches, A/E pour tourner, molette pour zoomer,
+clic droit glissé pour pivoter. **V** : mode visiteur (souris pour regarder, ZQSD pour
+marcher, Maj pour courir). Clic gauche : sélectionner un habitant. **F** : le suivre.
+**Tab** : habitant suivant. **R** : toits (auto / visibles / cachés). **Espace** : pause.
+**1-4** : vitesse. **H** : aide.
+
+### Vie quotidienne
+
+Les habitants ont des besoins façon Sims : **énergie** (dormir, bien mieux dans un lit),
+**vie sociale** (parler, manger ensemble, danser près des autres), **loisirs** (lire,
+canapé, repas à table, danse) en plus de la faim et de la santé. L'humeur qui en
+découle accélère ou ralentit le travail. Ils peuvent fabriquer des meubles (table, chaise,
+tabouret, canapé, bibliothèque, armoire, table de chevet, tapis, lampe, plante, tonneau,
+puits), les placer où ils veulent (`furnish` aménage automatiquement une maison) et les
+utiliser (`use`) ; `relax` permet de danser, flâner, s'asseoir par terre… Rien de tout
+cela n'est imposé : ce sont des possibilités que le LLM choisit ou non.
+
+### Architecture de la vue 3D
+
+```
+lifesim/bridge.py         serveur TCP (JSON par ligne) : terrain, blocs, habitants, animaux, événements
+godot/scripts/main.gd     scène : ciel, soleil/lune, lumières, connexion, sélection, minicarte
+godot/scripts/terrain.gd  relief, falaises minables, mélange de textures, végétation instanciée
+godot/scripts/buildings.gd murs fins raccordés, portes animées, toits à deux pans, planchers, meubles, feux
+godot/scripts/person.gd   habitant : modèle habillé, animations, outil en main, déplacements lissés
+godot/scripts/animal.gd   animaux animés
+godot/scripts/camera_rig.gd caméras aérienne / visiteur / suivi
+godot/scripts/hud.gd      interface : barre du haut, fiche habitant, journal, bulles de dialogue
+godot/tools/bake_retarget.gd transfert des animations UAL vers le squelette des personnages
+tools/fetch_assets.py     téléchargement des assets CC0
+```
+
 ## Le monde
 
 - **Terrain** généré par bruit : lacs, plages (sable, argile, gravier), prairies,
@@ -114,6 +170,7 @@ lifesim/llm.py          prompt, appel OpenRouter (threads), parsing JSON
 lifesim/brain.py        cerveau heuristique de secours (hors-ligne / erreur LLM)
 lifesim/simulation.py   boucle, métabolisme, décisions, combat, social, naissances
 lifesim/persistence.py  sauvegarde / reprise
+lifesim/bridge.py       pont réseau vers la vue 3D Godot
 lifesim/render.py       affichage pygame
 ```
 

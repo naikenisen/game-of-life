@@ -36,12 +36,21 @@ def parse_args():
     ap.add_argument("--no-save", action="store_true", help="ne jamais sauvegarder")
     ap.add_argument("--offline", action="store_true", help="sans LLM : cerveau heuristique")
     ap.add_argument("--headless", action="store_true", help="sans fenêtre")
+    ap.add_argument("--serve", action="store_true",
+                    help="mode serveur pour la vue 3D Godot (pas de fenêtre pygame) ; vitesse par défaut 2 ticks/s")
+    ap.add_argument("--port", type=int, default=7777, help="port TCP du mode --serve")
     ap.add_argument("--ticks", type=int, default=2000, help="durée en mode headless")
     ap.add_argument("--screenshot", type=str, default=None, help="(headless) enregistre une image PNG de la carte à la fin")
     return ap.parse_args()
 
 
+def _sigterm(_signum, _frame):
+    raise KeyboardInterrupt  # même chemin que Ctrl+C : sauvegarde puis arrêt propre
+
+
 def main():
+    import signal
+    signal.signal(signal.SIGTERM, _sigterm)
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
     args = parse_args()
     cfg = Config()
@@ -56,6 +65,8 @@ def main():
         cfg.height = args.height
     if args.tps:
         cfg.ticks_per_second = args.tps
+    elif args.serve:
+        cfg.ticks_per_second = 2  # vitesse « réaliste » pour la 3D : ~marche humaine, 1 jour = 10 min
     if args.concurrency:
         cfg.llm_concurrency = args.concurrency
     if args.language:
@@ -93,7 +104,9 @@ def main():
     print(f"Journal : {sim.logger.path}" + (f" | sauvegarde : {save_path}" if save_path else ""))
 
     try:
-        if args.headless:
+        if args.serve:
+            run_server(sim, args.port)
+        elif args.headless:
             run_headless(sim, args.ticks)
             if args.screenshot:
                 save_screenshot(sim, args.screenshot)
@@ -134,6 +147,44 @@ def run_headless(sim, n):
         if tick_interval > dt:
             time.sleep(tick_interval - dt)
     print(f"Terminé en {time.time() - t0:.1f}s")
+
+
+def run_server(sim, port):
+    from lifesim import persistence
+    from lifesim.bridge import Bridge
+    bridge = Bridge(sim, port=port)
+    bridge.start()
+    print(f"Serveur 3D prêt sur 127.0.0.1:{port} — lancez la vue Godot (./run3d.sh). Ctrl+C pour arrêter.")
+    paused = False
+    next_t = time.time()
+    last_status = 0
+    while True:
+        for cmd in bridge.poll_commands():
+            c = cmd.get("cmd")
+            if c == "speed":
+                sim.cfg.ticks_per_second = max(1, min(60, int(cmd.get("tps", 2))))
+            elif c == "pause":
+                paused = bool(cmd.get("value", not paused))
+            elif c == "save" and getattr(sim, "save_path", None):
+                persistence.save(sim, sim.save_path)
+                sim.event("💾 Partie sauvegardée.")
+        if not paused:
+            sim.step()
+        bridge.broadcast(paused)
+        if getattr(sim, "save_path", None) and time.time() - sim.last_save_time > 300:
+            persistence.save(sim, sim.save_path)
+        if time.time() - last_status > 30:
+            last_status = time.time()
+            day, hour, _, _ = sim.clock()
+            st = sim.llm.stats if sim.llm else {}
+            print(f"[jour {day} {hour}] tick {sim.tick} | vivants {len(sim.living_agents())} | "
+                  f"clients 3D {bridge.n_clients()} | LLM appels {st.get('calls', 0)} coût ${st.get('cost', 0):.3f}")
+        next_t += 1.0 / sim.cfg.ticks_per_second
+        delay = next_t - time.time()
+        if delay > 0:
+            time.sleep(delay)
+        else:
+            next_t = time.time()
 
 
 def save_screenshot(sim, path):

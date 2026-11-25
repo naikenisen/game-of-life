@@ -87,6 +87,19 @@ BLOCKS = {
     "scarecrow":      dict(solid=True,  blocks_animals=True, hp=10, color=(220, 200, 120)),
     "sign":           dict(solid=False, blocks_animals=False, hp=5, color=(190, 160, 110)),
     "trap":           dict(solid=False, blocks_animals=False, hp=10, color=(90, 90, 90), trap_damage=6),
+    # --- mobilier (vie quotidienne) ; use = ce qu'on peut y faire avec l'action use()
+    "table":          dict(solid=True,  blocks_animals=True, hp=15, color=(160, 110, 60), furniture=True, use="eat"),
+    "chair":          dict(solid=False, blocks_animals=True, hp=8,  color=(150, 100, 55), furniture=True, use="sit"),
+    "stool":          dict(solid=False, blocks_animals=True, hp=6,  color=(150, 105, 60), furniture=True, use="sit"),
+    "sofa":           dict(solid=False, blocks_animals=True, hp=12, color=(120, 60, 60), furniture=True, use="sit"),
+    "bookshelf":      dict(solid=True,  blocks_animals=True, hp=15, color=(110, 75, 40), furniture=True, use="read"),
+    "wardrobe":       dict(solid=True,  blocks_animals=True, hp=15, color=(130, 90, 50), furniture=True, use="dress"),
+    "nightstand":     dict(solid=True,  blocks_animals=True, hp=8,  color=(140, 95, 55), furniture=True),
+    "rug":            dict(solid=False, blocks_animals=False, hp=4, color=(170, 60, 70), furniture=True),
+    "lamp":           dict(solid=True,  blocks_animals=True, hp=6,  color=(250, 230, 160), furniture=True, light=3),
+    "plant_pot":      dict(solid=True,  blocks_animals=True, hp=4,  color=(80, 150, 70), furniture=True),
+    "barrel":         dict(solid=True,  blocks_animals=True, hp=15, color=(120, 80, 45), furniture=True),
+    "well":           dict(solid=True,  blocks_animals=True, hp=60, color=(110, 110, 120), use="drink"),
 }
 
 # matériaux utilisables pour un toit (1 unité par case couverte)
@@ -137,6 +150,19 @@ _r("leather_armor", 1, {"leather": 6}, "crafting_table")
 _r("iron_armor", 1, {"iron_ingot": 8}, "anvil")
 _r("diamond_armor", 1, {"diamond": 8}, "anvil")
 _r("bread", 1, {"wheat": 3}, "crafting_table")
+# mobilier
+_r("table", 1, {"planks": 4, "stick": 2}, "crafting_table")
+_r("chair", 1, {"planks": 3, "stick": 2}, "crafting_table")
+_r("stool", 1, {"planks": 2, "stick": 1}, "crafting_table")
+_r("sofa", 1, {"planks": 4, "wool": 3}, "crafting_table")
+_r("bookshelf", 1, {"planks": 6, "leather": 1}, "crafting_table")
+_r("wardrobe", 1, {"planks": 8}, "crafting_table")
+_r("nightstand", 1, {"planks": 3}, "crafting_table")
+_r("rug", 1, {"wool": 4})
+_r("lamp", 1, {"iron_ingot": 1, "glass": 1, "torch": 1}, "crafting_table")
+_r("plant_pot", 1, {"clay": 2, "sapling": 1})
+_r("barrel", 1, {"planks": 6, "iron_ingot": 1}, "crafting_table")
+_r("well", 1, {"cobblestone": 12, "planks": 4, "rope_lead": 1}, "crafting_table")
 _r("bowl_stew", 1, {"raw_mushroom": 2, "stick": 1}, "cook")
 _r("bone_meal", 3, {"bone": 1})
 

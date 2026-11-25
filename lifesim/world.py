@@ -116,12 +116,18 @@ class World:
         self._generate(nrng)
         # grille de coût de déplacement (liste plate, index y*w+x) :
         #   0 = infranchissable, -1 = eau (franchissable en bateau), sinon coût
+        self.dirty = set()
         self.cost = [0.0] * (self.w * self.h)
         for y in range(self.h):
             for x in range(self.w):
                 self._update_cell(x, y)
 
+    def mark(self, x, y):
+        """Signale une case modifiée (pour la vue 3D)."""
+        self.dirty.add((x, y))
+
     def _update_cell(self, x, y):
+        self.dirty.add((x, y))
         i = y * self.w + x
         if self.feature[y, x] in SOLID_FEATURES:
             self.cost[i] = 0
@@ -293,6 +299,7 @@ class World:
             return None
         self.amount[y, x] -= 1
         self.version += 1
+        self.dirty.add((x, y))
         if self.amount[y, x] <= 0:
             self.feature[y, x] = NONE
             self.amount[y, x] = 0
@@ -372,6 +379,7 @@ class World:
                     c["growth"] = 0
                     c["stage"] += 1
                     self.version += 1
+                    self.dirty.add((x, y))
 
     # ------------------------------------------------------------------ pathfinding
     def find_path(self, start, goals, agent_id=None, boat=False, max_nodes=12000):

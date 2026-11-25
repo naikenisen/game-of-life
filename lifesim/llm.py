@@ -56,6 +56,8 @@ WORLD RULES
 - Farming: wheat_seeds planted on farmland grow in 4 stages (faster within 4 tiles of water); harvesting a ripe plant gives wheat and seeds.
 - Crafting stations (crafting_table, furnace, campfire, anvil) must be placed in the world; recipes needing one work within 3 tiles of it (anyone's station).
 - Children are born when two people both choose it (propose_child) while together.
+- Daily needs (0-100): energy (drops while awake, restored by sleeping, much faster in a bed), social (drops when alone, rises when talking with people, eating together, dancing near others), fun (drops, faster while working; rises when relaxing, reading, sitting on a sofa, eating at a table, dancing). Your mood is the average of your needs (hunger counts double). Good mood makes you work faster; bad mood or exhaustion makes you slower.
+- Furniture (table, chair, stool, sofa, bookshelf, wardrobe, nightstand, rug, lamp, plant_pot, barrel, bed...) can be placed anywhere, inside houses with furnish() or build(custom), and used with use(). Others can see your home and what is inside.
 
 RECIPES (count output <- inputs @station). 'fuel' means one of: {', '.join(I.FUEL_ITEMS)}.
 {I.recipes_prompt_text()}
@@ -101,6 +103,7 @@ def build_user_prompt(sim, ag):
                  f"sheltered/warm here: {warm}. Home: {ag.home or 'none'}.")
     wpn, dmg = ag.weapon()
     rd = ag.ranged()
+    lines.append(f"NEEDS: energy {ag.energy:.0f}, social {ag.social:.0f}, fun {ag.fun:.0f} -> mood {ag.mood:.0f}/100")
     lines.append(f"COMBAT: melee {wpn or 'fist'} (damage {dmg})" + (f", ranged {rd[0]} ({ag.inv.get(rd[3], 0)} {rd[3]})" if rd else "")
                  + f", armor {ag.armor_name() or 'none'}.")
     lines.append(f"INVENTORY: {ag.inv_text()}")
