@@ -1,0 +1,13 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# journaux de simulation
+logs/
+
+# sauvegardes de parties
+saves/
