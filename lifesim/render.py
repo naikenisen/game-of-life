@@ -539,6 +539,25 @@ class App:
             y = self.text("Constructions", x, y, ACCENT, self.font_b)
             for s in mine[-5:]:
                 y = self.text(s.summary(), x, y, FG, self.font_s, wdt)
+        refl = [m[1] for m in ag.longmem if m[4] == "reflection"][-3:]
+        if refl:
+            y += 4
+            y = self.text("Réflexions", x, y, ACCENT, self.font_b)
+            for r in refl:
+                y = self.text(f"« {r} »", x, y, FG, self.font_s, wdt)
+        rels = sorted(((oid, r) for oid, r in ag.rel.items() if r["n"] or r["bond"] or abs(r["aff"]) >= 3),
+                      key=lambda kv: -(abs(kv[1]["aff"]) + (60 if kv[1]["bond"] else 0)))[:4]
+        if rels:
+            y += 4
+            y = self.text("Liens", x, y, ACCENT, self.font_b)
+            for oid, r in rels:
+                o = sim.agents.get(oid)
+                if o is None:
+                    continue
+                col = (140, 220, 140) if r["aff"] >= 8 else (255, 140, 120) if r["aff"] <= -8 else DIM
+                txt = f"{o.name} {r['aff']:+.0f}" + (f" ({r['bond']})" if r["bond"] else "") + \
+                      (f" — {r['opinion']}" if r["opinion"] else "")
+                y = self.text(txt[:160], x, y, col, self.font_s, wdt)
         y += 4
         y = self.text("Mémoire", x, y, ACCENT, self.font_b)
         for t, m in list(ag.memory)[-8:]:

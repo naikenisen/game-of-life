@@ -35,6 +35,8 @@ def parse_args():
                     help="fichier de sauvegarde (auto toutes les 5 min et à la fermeture)")
     ap.add_argument("--no-save", action="store_true", help="ne jamais sauvegarder")
     ap.add_argument("--offline", action="store_true", help="sans LLM : cerveau heuristique")
+    ap.add_argument("--no-reflection", action="store_true",
+                    help="pas de réflexion du soir par LLM (version heuristique gratuite à la place)")
     ap.add_argument("--headless", action="store_true", help="sans fenêtre")
     ap.add_argument("--serve", action="store_true",
                     help="mode serveur pour la vue 3D Godot (pas de fenêtre pygame) ; vitesse par défaut 2 ticks/s")
@@ -72,6 +74,7 @@ def main():
     if args.language:
         cfg.language = args.language
     cfg.offline = args.offline
+    cfg.reflection = not args.no_reflection
     cfg.budget = args.budget
     if args.think_interval:
         cfg.min_ticks_between_calls = args.think_interval

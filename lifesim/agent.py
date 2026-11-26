@@ -1,6 +1,6 @@
 """Un habitant : état, inventaire, mémoire, plan courant."""
 from collections import Counter, deque
-from dataclasses import dataclass, field
+from dataclasses import MISSING, dataclass, field, fields
 
 from . import items as I
 
@@ -75,6 +75,11 @@ class Agent:
     memory: deque = field(default_factory=lambda: deque(maxlen=40))
     inbox: list = field(default_factory=list)
     known: dict = field(default_factory=dict)        # ressource -> (x, y, tick)
+    longmem: list = field(default_factory=list)      # (tick, texte, importance, ids cités, "event"|"reflection")
+    rel: dict = field(default_factory=dict)          # id -> {aff, n, last, opinion, bond}
+    mem_since_reflect: int = 0
+    last_reflect_tick: int = 0
+    reflections: int = 0
     home: tuple | None = None
     child_proposal: tuple | None = None              # (partner_id, tick)
     combat_target: object = None
@@ -110,6 +115,13 @@ class Agent:
         d["sleeping"] = False
         d["combat_target"] = None
         return d
+
+    def __setstate__(self, d):
+        # parties sauvegardées avant l'ajout de nouveaux champs
+        for f in fields(self):
+            if f.name not in d:
+                d[f.name] = f.default_factory() if f.default_factory is not MISSING else f.default
+        self.__dict__.update(d)
 
     @property
     def pos(self):

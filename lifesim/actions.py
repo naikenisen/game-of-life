@@ -9,6 +9,7 @@ import random
 from . import blueprints as BP
 from . import items as I
 from . import world as W
+from . import mind as M
 from .animals import Animal
 
 
@@ -895,6 +896,8 @@ def act_demolish(sim, ag, p):
                         near = manhattan(owner.pos, ag.pos) <= sim.cfg.witness_radius
                         who = ag.name if near else "quelqu'un"
                         sim.remember(owner, f"Ton {b.type} en ({cx},{cy}) a été détruit par {who}.")
+                        if near:
+                            M.relate(sim, owner, ag, -6)
                         sim.wake(owner, f"your {b.type} at ({cx},{cy}) was destroyed by {who}")
     return f"demolished {broken} blocks and {len(roofs)} roof tiles (materials recovered)"
 
@@ -905,8 +908,24 @@ def act_harvest(sim, ag, p):
     radius = min(30, max(3, _int(p, "radius", 15)))
     cx, cy = _int(p, "x", ag.x), _int(p, "y", ag.y)
     replant = p.get("replant", True) not in (False, "no", "false")
-    n = 0
     max_n = min(200, max(1, _int(p, "amount", 100)))
+    stolen = {}   # propriétaire témoin -> (nombre de plants, dernière case)
+    try:
+        n = yield from _harvest_loop(sim, ag, w, cx, cy, radius, replant, max_n, stolen)
+    finally:
+        # un seul souvenir par récolte (et non un par plant)
+        for oid, (k, pos) in stolen.items():
+            o = sim.agents.get(oid)
+            if o is not None and o.alive:
+                sim.remember(o, f"{ag.name} a récolté {k} plant(s) de ton blé vers {pos}.")
+                M.relate(sim, o, ag, -2 - min(6.0, k / 2))
+    if n == 0:
+        raise ActionFailed("no ripe crops in range")
+    return f"harvested {n} wheat plants"
+
+
+def _harvest_loop(sim, ag, w, cx, cy, radius, replant, max_n, stolen):
+    n = 0
     while n < max_n:
         ripe = [pos for pos, c in w.crops.items() if c["stage"] >= 3 and cheb(pos, (cx, cy)) <= radius]
         if not ripe:
@@ -928,13 +947,11 @@ def act_harvest(sim, ag, p):
         if owner is not None and owner != ag.id:
             o = sim.agents.get(owner)
             if o is not None and o.alive and manhattan(o.pos, ag.pos) <= sim.cfg.witness_radius:
-                sim.remember(o, f"{ag.name} a récolté ton blé en ({x},{y}).")
+                stolen[owner] = (stolen.get(owner, (0, None))[0] + 1, (x, y))
         if replant and ag.remove("wheat_seeds", 1):
             w.crops[(x, y)] = {"stage": 0, "growth": 0, "owner": ag.id}
         w.version += 1
-    if n == 0:
-        raise ActionFailed("no ripe crops in range")
-    return f"harvested {n} wheat plants"
+    return n
 
 
 def act_plant(sim, ag, p):
@@ -1303,6 +1320,8 @@ def act_give(sim, ag, p):
         target.add(k, v)
     txt = ", ".join(f"{v} {k}" for k, v in goods.items())
     sim.remember(target, f"{ag.name} t'a donné {txt}.")
+    M.relate(sim, target, ag, 4 + min(8, sum(goods.values()) / 2))
+    M.relate(sim, ag, target, 2)
     sim.wake(target, f"{ag.name} gave you {txt}", soft=True)
     sim.event(f"{ag.name} donne {txt} à {target.name}", ag.pos, [ag, target])
     yield
@@ -1351,6 +1370,8 @@ def act_accept_trade(sim, ag, p):
         other.add(k, v)
     sim.trades.pop(oid, None)
     sim.remember(other, f"{ag.name} a accepté ton échange #{oid}.")
+    M.relate(sim, other, ag, 4)
+    M.relate(sim, ag, other, 3)
     sim.wake(other, f"{ag.name} accepted your trade #{oid}", soft=True)
     sim.event(f"Échange #{oid} entre {other.name} et {ag.name}", ag.pos, [ag, other])
     yield
@@ -1365,6 +1386,7 @@ def act_decline_trade(sim, ag, p):
     other = sim.agents.get(offer["from"])
     if other:
         sim.remember(other, f"{ag.name} a refusé ton échange #{oid}.")
+        M.relate(sim, other, ag, -2)
     yield
     return f"declined trade #{oid}"
 
@@ -1531,6 +1553,7 @@ def act_propose_child(sim, ag, p):
         return f"a child named {res.name} was born!"
     sim.remember(partner, f"{ag.name} te propose d'avoir un enfant ensemble (il faut que tu fasses propose_child "
                           f"avec {ag.name} près de lui/elle).")
+    M.relate(sim, partner, ag, 3)
     sim.wake(partner, f"{ag.name} proposes to have a child with you")
     # attend la réponse
     for _ in range(300):

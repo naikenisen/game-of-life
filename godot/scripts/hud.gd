@@ -260,12 +260,57 @@ func show_person(p: Person) -> void:
 		lines.append("[color=#9fb0c8]Sac :[/color] " + ", ".join(parts))
 	if d.get("notes", "") != "":
 		lines.append("[color=#9fb0c8]Notes :[/color] " + d["notes"])
+	var refl: Array = d.get("refl", [])
+	if refl.size() > 0:
+		lines.append("[color=#9fb0c8]Réflexions :[/color]")
+		for r in refl:
+			lines.append("  [i]« " + str(r) + " »[/i]")
+	var rels: Array = d.get("rel", [])
+	if rels.size() > 0:
+		lines.append("[color=#9fb0c8]Liens :[/color]")
+		for r in rels:
+			lines.append("  " + _rel_line(r))
 	var mem: Array = d.get("mem", [])
 	if mem.size() > 0:
 		lines.append("[color=#9fb0c8]Souvenirs :[/color]")
-		for m in mem.slice(-4):
+		for m in mem.slice(-3):
 			lines.append("  · " + m)
 	panel_body.text = "\n".join(lines)
+
+
+## [nom, affinité, lien familial, opinion, vivant]
+func _rel_line(r: Array) -> String:
+	var aff: int = int(r[1])
+	var label := "neutre"
+	var col := "#c8c8c8"
+	if aff >= 60:
+		label = "ami·e proche"
+		col = "#7fe08a"
+	elif aff >= 25:
+		label = "ami·e"
+		col = "#a6e3a1"
+	elif aff >= 8:
+		label = "sympathie"
+		col = "#cfe8b0"
+	elif aff <= -60:
+		label = "ennemi·e"
+		col = "#ff6b6b"
+	elif aff <= -30:
+		label = "rancune"
+		col = "#ff9a76"
+	elif aff <= -8:
+		label = "antipathie"
+		col = "#f5c08a"
+	var bond := ""
+	if str(r[2]) != "":
+		var b := str(r[2])
+		bond = " (enfant)" if b == "your child" else (" (parent)" if b == "your parent" else " (conjoint·e)")
+	var line := "[color=%s]♥[/color] %s%s : %s %+d" % [col, r[0], bond, label, aff]
+	if not bool(r[4]):
+		line += " †"
+	if str(r[3]) != "":
+		line += " — [i]%s[/i]" % r[3]
+	return line
 
 
 func update_minimap(img: Image) -> void:

@@ -8,6 +8,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from . import items as I
+from . import mind as M
 from .actions import ACTIONS_DOC
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -79,7 +80,7 @@ ANSWER FORMAT: reply with ONE JSON object and nothing else:
 {{
   "thought": "your short reasoning, in {lang}",
   "say": "optional: words you say aloud right now (people nearby hear), in {lang}",
-  "notes": "optional: rewrite your personal long-term notes (goals, places, opinions about people), max 400 chars, in {lang}",
+  "notes": "optional: rewrite your personal long-term notes (goals, places, plans), max 400 chars, in {lang}",
   "routine": [ ...steps... ]   (optional, up to 10 steps repeated in a loop after your plan; [] = no routine; omit to keep the current one),
   "keep_plan": false,   (true = keep executing your current unfinished plan instead of a new one)
   "plan": [ {{"action": "...", ...parameters}}, ... ]   (up to {cfg.max_plan_steps} steps, executed in order; prefer long plans)
@@ -161,9 +162,29 @@ def build_user_prompt(sim, ag):
         for o in offers:
             frm = sim.agents[o["from"]].name
             lines.append(f"  offer #{o['id']} from {frm}: gives {_fmt_counts(o['give'])} / wants {_fmt_counts(o['want'])}")
-    if ag.memory:
+    # --- vie intérieure : conclusions, relations, souvenirs marquants (récence + importance + pertinence)
+    refl = [m for m in ag.longmem if m[4] == "reflection"][-4:]
+    if refl:
+        lines.append("WHAT YOU HAVE CONCLUDED ABOUT YOUR LIFE (your own reflections):")
+        for t, txt, _i, _a, _k in refl:
+            lines.append(f"  - {txt}")
+    present = {o.id for o, _d in p["agents"]}
+    ctx_text = " ".join(ag.wake_reasons) + " " + " ".join(txt for _t, txt in ag.inbox[-10:])
+    ctx_ids = present | set(M.NAMES.find(sim, ctx_text)) | {o["from"] for o in offers}
+    rels = M.relations_text(sim, ag, present_ids=ctx_ids)
+    if rels:
+        lines.append("PEOPLE YOU KNOW:")
+        lines += rels
+    recent = list(ag.memory)[-8:]
+    old = [m for m in M.recall(sim, ag, k=6, context_ids=ctx_ids, context_text=ctx_text,
+                                exclude_ticks={t for t, _ in recent}, kinds=("event",))]
+    if old:
+        lines.append("IMPORTANT MEMORIES FROM BEFORE:")
+        for t, txt, imp, _a, _k in old:
+            lines.append(f"  [t{t}] {txt}")
+    if recent:
         lines.append("YOUR RECENT MEMORIES:")
-        for t, txt in list(ag.memory)[-12:]:
+        for t, txt in recent:
             lines.append(f"  [t{t}] {txt}")
     if ag.routine:
         lines.append(f"YOUR ROUTINE (repeated {ag.routine_cycles} times so far): "

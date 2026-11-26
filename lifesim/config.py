@@ -51,6 +51,7 @@ class Config:
     min_ticks_urgent: int = 60           # délai minimal en cas d'urgence (attaque...)
     max_ticks_without_call: int = 4000   # on redemande au LLM au moins aussi souvent
     language: str = "French"             # langue des pensées / dialogues
+    reflection: bool = True              # réflexion du soir par LLM (1 appel court / habitant / jour)
     offline: bool = False                # True = cerveau heuristique sans LLM
 
     # perception

@@ -4,6 +4,7 @@ Il produit exactement le même format qu'un LLM. Il donne une vie quotidienne
 crédible sans coût (dormir la nuit, travailler, meubler sa maison, discuter,
 se détendre), mais c'est le LLM qui rend les comportements vraiment singuliers."""
 import random
+from . import items as I
 
 _rng = random.Random(99)
 
@@ -37,6 +38,14 @@ def _furniture_in(sim, site):
             if b is not None:
                 out.append(b.type)
     return out
+
+
+def _social_target(sim, ag):
+    """Quelqu'un à qui parler : de préférence une personne appréciée, jamais quelqu'un qu'on déteste."""
+    seen = [o for o, _d in sim.perceive(ag)["agents"] if ag.rel.get(o.id, {}).get("aff", 0) > -20]
+    if not seen:
+        return None
+    return max(seen, key=lambda o: ag.rel.get(o.id, {}).get("aff", 0) + _rng.random() * 15)
 
 
 def heuristic_plan(sim, ag):
@@ -79,11 +88,16 @@ def heuristic_plan(sim, ag):
         thought = "Je suis épuisé(e), une petite sieste."
         plan = [{"action": "use", "furniture": "bed", "ticks": 200}] if _near_block(sim, ag, "bed", 30) \
             else [{"action": "relax", "activity": "rest", "ticks": 80}]
-    elif ag.social < 30 and sim.perceive(ag)["agents"]:
-        other = sim.perceive(ag)["agents"][0][0]
-        thought = f"Je me sens seul(e), je vais parler à {other.name}."
-        plan = [{"action": "say", "to": other.name, "text": _rng.choice(GREETINGS).format(n=other.name)},
-                {"action": "relax", "activity": _rng.choice(["sit", "dance", "watch"]), "ticks": 60}]
+    elif ag.social < 40 and _social_target(sim, ag):
+        other = _social_target(sim, ag)
+        liked = ag.rel.get(other.id, {}).get("aff", 0) >= 20
+        thought = (f"J'ai envie de voir {other.name}." if liked
+                   else f"Je me sens seul(e), je vais parler à {other.name}.")
+        plan = [{"action": "say", "to": other.name, "text": _rng.choice(GREETINGS).format(n=other.name)}]
+        spare = [k for k in I.FOOD if inv.get(k, 0) >= 4]
+        if spare and (liked or _rng.random() < 0.3):
+            plan.append({"action": "give", "to": other.name, "items": {_rng.choice(spare): 1}})
+        plan.append({"action": "relax", "activity": _rng.choice(["sit", "dance", "watch"]), "ticks": 60})
     elif ag.fun < 30:
         thought = "J'ai besoin de me changer les idées."
         if house and any(f in _furniture_in(sim, house) for f in ("sofa", "bookshelf", "chair")):

@@ -8,6 +8,7 @@ from collections import deque
 
 from . import actions as A
 from . import items as I
+from . import mind as M
 from . import world as W
 from .agent import COLORS, FEMALE_NAMES, NAMES, Agent
 from .animals import AnimalManager
@@ -64,6 +65,7 @@ class Simulation:
         self.events = deque(maxlen=300)
         self.event_total = 0
         self.pending = {}            # agent_id -> (future, tick)
+        self.reflecting = {}         # agent_id -> future (réflexion du soir)
         self._next_site = 1
         self._next_trade = 1
         self._next_agent = 1
@@ -167,10 +169,11 @@ class Simulation:
         self.event_total += 1
         self.logger.log({"type": "event", "tick": self.tick, "text": text})
 
-    def remember(self, ag, text):
+    def remember(self, ag, text, importance=None, about=None):
         if ag.memory and ag.memory[-1][1] == text:
             return
         ag.memory.append((self.tick, text))
+        M.store(self, ag, text, importance, about)
 
     def wake(self, ag, reason, urgent=False, soft=False):
         """Demande une nouvelle décision. soft=True : simple information, transmise au
@@ -313,6 +316,8 @@ class Simulation:
         ag.speech = (text, self.tick + 80)
         ag.social = min(100.0, ag.social + 6)
         self.remember(ag, f"Tu as dit{' à ' + target.name if target else ''} : « {text} »")
+        if target is not None:
+            M.relate(self, ag, target, 1.0)
         self.event(f"{ag.name}{' → ' + target.name if target else ''} : « {text} »")
         r = self.cfg.hearing_radius
         for o in self.living_agents():
@@ -321,8 +326,10 @@ class Simulation:
             if abs(o.x - ag.x) <= r and abs(o.y - ag.y) <= r:
                 to_you = target is not None and target.id == o.id
                 o.social = min(100.0, o.social + (8 if to_you else 3))
+                M.relate(self, o, ag, 1.5 if to_you else 0.3, interaction=to_you)
                 o.inbox.append((self.tick, f"{ag.name} said{' to you' if to_you else ''}: \"{text}\""))
                 if to_you:
+                    self.remember(o, f"{ag.name} t'a dit : « {text} »", importance=4, about=(ag.id,))
                     self.wake(o, f"{ag.name} spoke to you")
 
     def create_offer(self, ag, target, give, want):
@@ -339,6 +346,15 @@ class Simulation:
 
     def on_aggression(self, attacker, target):
         self.witness(attacker.pos, f"{attacker.name} attaque {target.name}", exclude={attacker.id, target.id})
+        r = self.cfg.witness_radius
+        for o in self.living_agents():
+            if o.id in (attacker.id, target.id) or abs(o.x - attacker.x) > r or abs(o.y - attacker.y) > r:
+                continue
+            # on juge l'agresseur selon ce qu'on pense de la victime (et de l'agresseur)
+            fv = o.rel.get(target.id, {}).get("aff", 0.0)
+            fa = o.rel.get(attacker.id, {}).get("aff", 0.0)
+            if fv >= fa - 10:
+                M.relate(self, o, attacker, -4 - max(0.0, fv) / 10, interaction=False)
         self.event(f"⚔ {attacker.name} attaque {target.name} !")
 
     def damage_agent(self, target, dmg, attacker=None, cause="", source=None):
@@ -353,6 +369,7 @@ class Simulation:
             target.last_attacker = attacker.id
             if not target.memory or "t'attaque" not in target.memory[-1][1] or self.tick - target.memory[-1][0] > 60:
                 self.remember(target, f"{who} t'attaque ! (PV {target.hp:.0f})")
+                M.relate(self, target, attacker, -12)
             self.wake(target, f"you are being attacked by {who} (your HP {target.hp:.0f})", urgent=True)
             self._reflex_defend(target, attacker)
         else:
@@ -406,6 +423,22 @@ class Simulation:
             killer.kills += 1
             self.remember(killer, f"Tu as tué {ag.name}.")
             self.wake(killer, f"you killed {ag.name}", soft=True)
+        # les proches apprennent la nouvelle, même de loin
+        r = self.cfg.witness_radius
+        for o in self.living_agents():
+            ro = o.rel.get(ag.id)
+            if ro is None:
+                continue
+            near = abs(o.x - ag.x) <= r and abs(o.y - ag.y) <= r
+            if ro["bond"] or ro["aff"] >= 25:
+                if not near:
+                    self.remember(o, f"Tu apprends que {ag.name} ({ro['bond'] or 'ton ami·e'}) est mort(e) ({cause}).",
+                                  importance=10)
+                o.social = max(0.0, o.social - 25)
+                o.fun = max(0.0, o.fun - 20)
+                self.wake(o, f"{ag.name}, who mattered to you, died ({cause})")
+            if killer is not None and o.id != killer.id and (near or ro["bond"]):
+                M.relate(self, o, killer, -15 - max(0.0, ro["aff"]) * 0.6, interaction=False)
 
     def try_birth(self, a, b):
         if len(self.living_agents()) >= self.cfg.max_population:
@@ -425,7 +458,13 @@ class Simulation:
         self.remember(child, f"Tu viens de naître. Tes parents sont {a.name} et {b.name}.")
         self.wake(child, "you were just born")
         for p, q in ((a, b), (b, a)):
-            self.remember(p, f"Ton enfant {child.name} est né, avec {q.name}.")
+            self.remember(p, f"Ton enfant {child.name} est né, avec {q.name}.", importance=10)
+            M.bond(p, q, "partner, parent of " + child.name)
+            M.relate(self, p, q, 20)
+            M.bond(p, child, "your child")
+            M.relate(self, p, child, 50)
+            M.bond(child, p, "your parent")
+            M.relate(self, child, p, 50)
         self.event(f"👶 {child.name} est né(e), enfant de {a.name} et {b.name}.")
         return child
 
@@ -621,6 +660,40 @@ class Simulation:
         self.logger.log({"type": "decision", "tick": self.tick, "agent": ag.name, "thought": thought,
                          "plan": ag.plan, "routine": ag.routine, "keep": keep, "notes": ag.notes})
 
+    # ================================================================ réflexion
+    def _schedule_reflections(self):
+        t = self.tick
+        for ag in self.living_agents():
+            if (t + ag.id * 37) % 120 or ag.id in self.reflecting:
+                continue
+            if t - ag.last_reflect_tick < self.cfg.day_length // 2 or not M.reflect_due(self, ag):
+                continue
+            over_budget = self.cfg.budget and not self.offline and self.llm.stats["cost"] >= self.cfg.budget
+            if self.offline or over_budget or not self.cfg.reflection:
+                M.apply_reflection(self, ag, M.heuristic_reflection(self, ag))
+                continue
+            if self.llm.stats["in_flight"] >= self.cfg.llm_concurrency:
+                continue  # on retentera un peu plus tard dans la nuit
+            self.reflecting[ag.id] = self.llm.submit(ag.id, M.reflect_messages(self, ag))
+            ag.last_reflect_tick = t  # évite de relancer pendant l'appel
+
+    def _collect_reflections(self):
+        for aid, fut in list(self.reflecting.items()):
+            if not fut.done():
+                continue
+            del self.reflecting[aid]
+            ag = self.agents.get(aid)
+            if ag is None or not ag.alive:
+                continue
+            try:
+                content, err = fut.result()
+                if err:
+                    raise RuntimeError(err)
+                M.apply_reflection(self, ag, M.parse_reflection(content))
+            except Exception as e:
+                self.logger.log({"type": "reflection_error", "agent": ag.name, "error": str(e)[:200]})
+                M.apply_reflection(self, ag, M.heuristic_reflection(self, ag))
+
     # ================================================================ boucle
     def step(self):
         self.tick += 1
@@ -656,6 +729,9 @@ class Simulation:
                 company = sum(1 for o in self.agents.values() if o.alive and o is not ag
                               and abs(o.x - ag.x) <= 3 and abs(o.y - ag.y) <= 3)
                 ag.social = min(100.0, ag.social + 0.15 * min(company, 3))
+            if t % 100 == ag.id % 100:  # passer du temps ensemble rapproche
+                M.drift_company(self, ag, [o for o in self.agents.values() if o.alive and o is not ag
+                                           and abs(o.x - ag.x) <= 3 and abs(o.y - ag.y) <= 3])
             if ag.activity in ("chop", "mine", "dig", "build", "farm", "harvest", "craft"):
                 ag.fun = max(0.0, ag.fun - 1 / 20)
             else:
@@ -697,6 +773,11 @@ class Simulation:
             self._maybe_request(ag)
             self._run_task(ag)
 
+        # réflexion du soir : une fois par nuit, chacun tire les leçons de sa journée
+        if night:
+            self._schedule_reflections()
+        if self.reflecting:
+            self._collect_reflections()
         # rythme de vie : à la tombée de la nuit et au matin, chacun refait le point
         frac = (t % cfg.day_length) / cfg.day_length
         if t % cfg.day_length == int(cfg.day_length * (1 - cfg.night_fraction)) - 30:
@@ -723,10 +804,11 @@ class Simulation:
         self.offline = cfg.offline or not cfg.api_key
         self.llm = None if self.offline else LLMClient(cfg, self.logger)
         self.pending = {}
+        self.reflecting = {}
 
     def __getstate__(self):
         d = self.__dict__.copy()
-        for k in ("llm", "logger", "pending", "_budget_warned"):
+        for k in ("llm", "logger", "pending", "reflecting", "_budget_warned"):
             d.pop(k, None)
         return d
 
@@ -734,6 +816,7 @@ class Simulation:
         self.__dict__.update(d)
         self.llm = self.logger = None
         self.pending = {}
+        self.reflecting = {}
 
     def after_load(self):
         self._connect(self.cfg)

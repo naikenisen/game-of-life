@@ -110,6 +110,30 @@ puits), les placer où ils veulent (`furnish` aménage automatiquement une maiso
 utiliser (`use`) ; `relax` permet de danser, flâner, s'asseoir par terre… Rien de tout
 cela n'est imposé : ce sont des possibilités que le LLM choisit ou non.
 
+### Vie intérieure : mémoire, relations, réflexion
+
+Inspirée des « Generative Agents » de Stanford (Park et al., 2023), en version économe :
+
+- **Mémoire à long terme** : chaque souvenir reçoit une importance de 1 à 10 calculée
+  par le code (une agression ou une naissance comptent plus qu'un bonjour). À chaque
+  décision, le LLM reçoit les souvenirs récents **et** les souvenirs anciens les plus
+  utiles maintenant, choisis par récence + importance + pertinence (les personnes
+  présentes ou qui lui parlent, les mots en commun avec la situation). La pertinence
+  est lexicale plutôt que par embeddings : gratuite.
+- **Relations** : chaque habitant a une affinité (-100 à +100) envers chacun, qui
+  évolue avec ce qui se passe : parler, donner, échanger, passer du temps ensemble
+  rapproche ; refuser un échange, récolter le blé d'un autre, démolir ses murs,
+  l'attaquer ou s'en prendre à ses proches éloigne. Les liens familiaux (conjoint,
+  parent, enfant) sont mémorisés, et la mort d'un proche est apprise même de loin.
+- **Réflexion du soir** : une fois par nuit, si la journée a été riche en événements,
+  l'habitant fait le point (un appel LLM court) : il en tire 1 à 3 conclusions
+  durables (« je ne peux pas faire confiance à Paul »), une opinion sur les gens qui
+  comptent pour lui, et ses objectifs pour les jours suivants. Ces conclusions et
+  opinions sont ensuite montrées à chaque décision. Hors-ligne (ou budget atteint, ou
+  `--no-reflection`), une version heuristique gratuite les remplace.
+
+Dans la fiche d'un habitant (2D comme 3D) : ses réflexions et ses liens.
+
 ### Architecture de la vue 3D
 
 ```
@@ -168,6 +192,7 @@ lifesim/actions.py      exécution algorithmique de chaque action (générateurs
 lifesim/agent.py        état d'un habitant
 lifesim/llm.py          prompt, appel OpenRouter (threads), parsing JSON
 lifesim/brain.py        cerveau heuristique de secours (hors-ligne / erreur LLM)
+lifesim/mind.py         mémoire à long terme, relations, réflexion du soir
 lifesim/simulation.py   boucle, métabolisme, décisions, combat, social, naissances
 lifesim/persistence.py  sauvegarde / reprise
 lifesim/bridge.py       pont réseau vers la vue 3D Godot
@@ -225,6 +250,10 @@ coûtaient environ 2,5 $ de l'heure à vitesse x1 (mesuré). Ces mécanismes div
 le nombre de décisions par environ 3 en test hors-ligne ; le coût réel avec le
 LLM n'a pas encore été remesuré. Le coût est proportionnel à la vitesse de la
 simulation (x4 = 4 fois plus d'appels par heure réelle).
+
+La réflexion du soir ajoute au plus un appel court (~1 000 tokens) par habitant et
+par jour simulé, seulement après une journée riche en événements : quelques
+centimes de l'heure au plus. `--no-reflection` la désactive.
 
 Pour réduire encore : `--think-interval 800`, `--budget 1` (plafond en $, ensuite
 cerveau heuristique), ou un modèle moins cher par token (`--model openai/gpt-oss-20b`).

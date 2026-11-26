@@ -172,8 +172,21 @@ class Bridge:
             "inv": {k: v for k, v in ag.inv.items() if v > 0},
             "notes": ag.notes, "home": list(ag.home) if ag.home else None, "kills": ag.kills,
             "mem": [m for _t, m in list(ag.memory)[-6:]], "death": ag.death_cause,
+            "refl": [m[1] for m in ag.longmem if m[4] == "reflection"][-3:],
+            "rel": self._relations(ag),
         }
         return d
+
+    def _relations(self, ag):
+        out = []
+        for oid, r in ag.rel.items():
+            o = self.sim.agents.get(oid)
+            if o is None or (not r["bond"] and r["n"] == 0 and abs(r["aff"]) < 3):
+                continue
+            out.append((abs(r["aff"]) + (60 if r["bond"] else 0), [o.name, round(r["aff"]), r["bond"], r["opinion"],
+                                                                   o.alive]))
+        out.sort(key=lambda it: -it[0])
+        return [x for _w, x in out[:5]]
 
     def _animal(self, a):
         moved = self._prev_apos.get(a.id) not in (None, a.pos)
